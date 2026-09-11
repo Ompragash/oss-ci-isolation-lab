@@ -1,0 +1,25 @@
+name: Fork CI reference
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify fork secret withholding
+        env:
+          OSS_CI_CANARY: ${{ secrets.OSS_CI_CANARY }}
+        run: python3 scripts/probe_boundaries.py
+      - name: Build and test
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r requirements-test.txt
+          .venv/bin/python -m compileall -q app.py
+          .venv/bin/python app.py
+          .venv/bin/python -m pytest -q --junitxml=reports/junit.xml --cov=app --cov-report=lcov:reports/lcov.info --cov-report=term-missing
