@@ -79,3 +79,37 @@ pipeline:
           set -eu
           hcli test-reports upload reports/junit.xml
           hcli cov upload --file=reports/lcov.info
+  - id: trusted_reporting
+    runtime: cloud
+    clone:
+      enabled: false
+    cache:
+      enabled: false
+    steps:
+    - id: post_commit_status
+      run:
+        shell: bash
+        script: |
+          set -eu
+          python3 - <<'PY'
+          import json,os,re,urllib.request
+          sha=os.environ['EXPECTED_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}',sha)
+          status=os.environ['VALIDATION_STATUS']
+          assert status in {'Success','SUCCEEDED','Succeeded','Failed','FAILED','Failure','Aborted','ABORTED','Expired','ERRORED','Errored','Skipped','SKIPPED'}, 'Unknown validation status: '+status
+          success=status in {'Success','SUCCEEDED','Succeeded'}
+          execution=os.environ['EXECUTION_ID']
+          assert re.fullmatch(r'[A-Za-z0-9_-]+',execution)
+          url='https://unifiedpipeline.harness.io/ng/account/MGY3MmJmM2ItNTY5Ny00Yj/all/orgs/default/projects/chef_oss_pov/pipelines/oss_ci_conditions/deployments/'+execution+'/pipeline'
+          payload={'state':'success' if success else 'failure','context':'harness/conditional-guard','description':'CI trust-boundary validation '+('passed' if success else 'failed'),'target_url':url}
+          req=urllib.request.Request('https://api.github.com/repos/ansibleautomates/oss-ci-isolation-lab/statuses/'+sha,method='POST',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+os.environ['OSS_CI_ASSETS_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+          with urllib.request.urlopen(req,timeout=30) as response: result=json.load(response)
+          assert result['state']==payload['state']
+          print(json.dumps({'github_status_posted':result['state'],'context':result['context'],'commit':sha,'contributor_code_executed':False}))
+          PY
+        env:
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+          VALIDATION_STATUS: <+pipeline.stages.conditional_validation.status>
+          EXECUTION_ID: <+pipeline.executionId>
+          OSS_CI_ASSETS_TOKEN: <+secrets.getValue("oss_ci_assets_token")>
+    if: <+Always>
