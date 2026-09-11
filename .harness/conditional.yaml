@@ -1,0 +1,81 @@
+pipeline:
+  clone:
+    enabled: false
+  timeout: 10m
+  inputs:
+    head_sha:
+      type: string
+      default: ''
+  env:
+    CI_ENABLE_HCLI_FOR_TESTS: 'true'
+  stages:
+  - id: conditional_validation
+    runtime: cloud
+    clone:
+      enabled: false
+    cache:
+      enabled: false
+    steps:
+    - id: checkout_exact_commit
+      run:
+        shell: bash
+        script: |
+          set -eu
+          python3 - <<'PY'
+          import os,re,subprocess
+          sha=os.environ['EXPECTED_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}',sha), 'Exact commit SHA required'
+          subprocess.run(['git','init'],check=True)
+          subprocess.run(['git','remote','add','origin','https://github.com/ansibleautomates/oss-ci-isolation-lab.git'],check=True)
+          subprocess.run(['git','-c','credential.helper=','fetch','--depth=1','origin',sha],check=True)
+          subprocess.run(['git','checkout','--detach','FETCH_HEAD'],check=True)
+          actual=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert actual==sha, 'Checkout revision mismatch'
+          print('VERIFIED_CONTRIBUTOR_SHA='+actual)
+          PY
+        env:
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+    - id: probe_before
+      run:
+        shell: bash
+        script: python3 scripts/probe_boundaries.py
+    - id: same_repository_secret
+      run:
+        shell: bash
+        script: |
+          python3 - <<'PY'
+          import os,json
+          assert os.environ['OSS_CI_CANARY'].startswith('synthetic-only-')
+          print(json.dumps({'trusted_secret_step_executed':True,'canary_resolved':True}))
+          PY
+        env:
+          OSS_CI_CANARY: <+secrets.getValue("oss_ci_canary")>
+      if: <+trigger.payload.pull_request.head.repo.id> != null && <+trigger.payload.pull_request.head.repo.id> == <+trigger.payload.repository.id>
+    - id: probe_after
+      run:
+        shell: bash
+        script: python3 scripts/probe_boundaries.py
+    - id: build_and_run
+      run:
+        shell: bash
+        script: |
+          set -eu
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check -r requirements-test.txt
+          .venv/bin/python -m compileall -q app.py
+          mkdir -p dist
+          cp app.py dist/app.py
+          .venv/bin/python app.py
+    - id: test
+      run:
+        shell: bash
+        script: |
+          set -eu
+          .venv/bin/python -m pytest -q --junitxml=reports/junit.xml --cov=app --cov-report=lcov:reports/lcov.info --cov-report=xml:reports/coverage.xml --cov-report=html:reports/coverage-html --cov-report=term-missing
+    - id: upload_reports
+      run:
+        shell: bash
+        script: |
+          set -eu
+          hcli test-reports upload reports/junit.xml
+          hcli cov upload --file=reports/lcov.info
