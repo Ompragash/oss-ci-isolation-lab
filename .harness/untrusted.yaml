@@ -96,5 +96,10 @@ pipeline:
         shell: bash
         script: |
           set -eu
-          hcli test-reports upload reports/junit.xml
-          hcli cov upload --file=reports/lcov.info
+          if [ -f reports/junit.xml ]; then
+            hcli test-reports upload reports/junit.xml
+          fi
+          if [ -f reports/lcov.info ]; then
+            hcli cov upload --file=reports/lcov.info
+          fi
+      if: <+Always>
